@@ -1,5 +1,6 @@
-import { login, getClient } from './discord';
-import { init as initDb } from '../subs';
+import { init as initDiscord, login, getClient } from './discord/discord';
+import { init as initDb } from '../db'
+import { init as initShard } from './master';
 import log from '../log';
 import {
   handleMessage,
@@ -8,7 +9,7 @@ import {
   handleGuildDelete,
   handleReady,
   handleChannelDelete,
-} from './discordEvents';
+} from './discord/discordEvents';
 
 import handleMasterMsg from './handleMasterMsg';
 
@@ -25,7 +26,12 @@ process.on('message', (msg) => {
 
 const start = async () => {
   // Init database
-  await initDb();
+  log("⚙️ Initializing database...");
+  initDb();
+  // Init discord client
+  log("⚙️ Creating Discord client...");
+  initDiscord();
+  initShard();
   // Register discord handles
   getClient()
     .on('message', handleMessage)

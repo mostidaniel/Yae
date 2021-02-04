@@ -1,7 +1,7 @@
-import { init as initDb } from './subs';
+import { init as initDb } from './db';
 import { sanityCheck } from './twitter';
-import shardMsgHandler from './shardMsgHandler';
-import manager from './shardManager';
+import shardMsgHandler from './shardMgr/shardMsgHandler';
+import manager from './shardMgr/shardManager';
 import log from './log';
 
 const shardReady = async () => {
@@ -9,12 +9,12 @@ const shardReady = async () => {
     || !manager.shards.every((shard) => shard.ready)) return;
   log('✅ All shards are ready!');
   // All shards are ready, start taking messages
-  manager.shards.every((shard) => shard.on('message', (msg) => {
+  manager.shards.each((shard) => shard.on('message', (msg) => {
     if (msg.cmd) {
       shardMsgHandler(shard, msg);
     }
   }));
-  await initDb();
+  initDb();
   log('✅ Connection to database successful');
   sanityCheck();
 };
@@ -24,11 +24,20 @@ process.on('beforeExit', (code) => {
 });
 
 const start = async () => {
-  manager.on('shardCreate', (shard) => {
+  try {
+    manager.on('shardCreate', (shard) => {
     log(`⚙️ Launched shard ${shard.id}...`);
     shard.on('ready', shardReady);
   });
-  manager.spawn('auto', Number(process.env.SHARD_SPAWN_DELAY || 15000), Number(process.env.SHARD_SPAWN_TIMEOUT || 60000));
+    log("Spawning shards...");
+    manager.spawn('auto', Number(process.env.SHARD_SPAWN_DELAY || 15000), Number(process.env.SHARD_SPAWN_TIMEOUT || 60000));
+  } catch (e) {
+    log("Can't spawn shard:");
+    log(e);
+  }
 };
-
-start();
+try {
+  start();
+} catch (e) {
+  log(e)
+}
