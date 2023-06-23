@@ -1,17 +1,16 @@
 // Direct mappings for discord.js methods
-import { Client, Permissions, Channel, TextChannel, GuildChannel, DMChannel, NewsChannel, Intents } from 'discord.js';
+import { Permissions, AnyChannel, TextChannel, GuildChannel, DMChannel, NewsChannel, Intents, ThreadChannel } from 'discord.js';
 import log from '../../log';
 import Backup from '../../backup';
+import { Client } from './clientType';
 
 let dClient: Client = null;
-
 
 export const init = () => {
   try {
     const intents = new Intents();
     intents.add('GUILDS', 'GUILD_MESSAGES', 'DIRECT_MESSAGES')
     dClient = new Client({
-      messageCacheMaxSize: 1,
       messageCacheLifetime: 30,
       messageSweepInterval: 60,
       restGlobalRateLimit: 5,
@@ -30,9 +29,10 @@ const reconnectionDelay = new Backup({
   maxValue: 60000,
 });
 
-export const isDmChannel = (c: Channel): c is DMChannel => c.type === 'dm';
-export const isTextChannel = (c: Channel): c is TextChannel | NewsChannel => c.type === 'text' || c.type === 'news';;
-export const isNewsChannel = (c: Channel): c is NewsChannel => c.type === 'news';
+export const isDmChannel = (c: AnyChannel): c is DMChannel => c.type === 'DM';
+export const isTextChannel = (c: AnyChannel): c is TextChannel | NewsChannel | ThreadChannel => c.type === 'GUILD_TEXT' || c.type === 'GUILD_NEWS' || c.type === "GUILD_PUBLIC_THREAD" || c.type === "GUILD_PRIVATE_THREAD" || c.type === 'GUILD_NEWS_THREAD';
+export const isNewsChannel = (c: AnyChannel): c is NewsChannel => c.type === 'GUILD_NEWS';
+export const isThreadChannel = (c: AnyChannel): c is ThreadChannel => c.type === "GUILD_PRIVATE_THREAD" || c.type === "GUILD_PUBLIC_THREAD";
 
 export const getClient = () => dClient;
 
@@ -47,7 +47,7 @@ export const login = async () => {
     setTimeout(login, reconnectionDelay.value());
     reconnectionDelay.increment();
   }
-};
+}
 
 export const user = () => dClient.user;
 
@@ -66,19 +66,11 @@ export const getUserDm = async (id: string) => {
 export const canPostIn = (channel: GuildChannel) => {
   if (!channel) return false;
   const permissions = channel.permissionsFor(dClient.user);
-  return (
-    permissions.has(Permissions.FLAGS.SEND_MESSAGES)
-    && permissions.has(Permissions.FLAGS.VIEW_CHANNEL)
-  );
+  return permissions.has([Permissions.FLAGS.SEND_MESSAGES, Permissions.FLAGS.VIEW_CHANNEL]);
 };
 
 export const canPostEmbedIn = (channel: GuildChannel) => {
   if (!channel) return false;
   const permissions = channel.permissionsFor(dClient.user);
-  return (
-    permissions.has(Permissions.FLAGS.SEND_MESSAGES)
-    && permissions.has(Permissions.FLAGS.VIEW_CHANNEL)
-    && permissions.has(Permissions.FLAGS.EMBED_LINKS)
-    && permissions.has(Permissions.FLAGS.ATTACH_FILES)
-  );
+  return permissions.has([Permissions.FLAGS.SEND_MESSAGES, Permissions.FLAGS.VIEW_CHANNEL, Permissions.FLAGS.EMBED_LINKS, Permissions.FLAGS.ATTACH_FILES]);
 };

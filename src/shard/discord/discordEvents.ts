@@ -8,16 +8,19 @@ import {
   message as postMessage,
 } from '../post';
 import { createStream, destroyStream } from '../master';
-import { user, login, isTextChannel } from './discord';
+import { user, login, isTextChannel, isDmChannel, getClient } from './discord';
 import i18n from '../i18n';
 import dbl from '../dbl';
-import { Channel, Guild, Message } from 'discord.js';
+import { AnyChannel, Guild, Interaction, Message } from 'discord.js';
 import handleCommand from '../commands';
 import { rmGuild, getGuildInfo } from '../../db/guilds';
 import { rmChannel } from '../../db/channels';
+import loadSlashCmds from '../slashCommands'
+import registerSlashCommands from './registerSlashCommands';
+
 
 const parseWords = (line: string): ParsedCmd => {
-  const regxp = /(?:--|—)(\w+)(=(?:"|”)(.*?)(?:"|”)|=(\S+))?|(?:"|”)(.*?)(?:"|”)|(\S+)/g;
+  const regxp = /(?:--|—)(\w+)(=(?:"|”|“)(.*?)(?:"|”|“)|=(\S+))?|(?:"|”|“)(.*?)(?:"|”|“)|(\S+)/g;
   const args = [];
   const flags = [];
   const options: CmdOptions = {}
@@ -51,8 +54,8 @@ export const handleMessage = async (message: Message) => {
       && !!message.mentions.members
       && message.mentions.members.find((item) => item.user.id === user().id)
     ) {
-      message.reply(`My prefix on this server is \`${prefix}\`\n\n${fortune.fortune()}`);
-    } else if (message.channel.type === 'dm') {
+      message.reply(`${i18n(lang, 'pingReply', {prefix})}\n\n${fortune.fortune()}`);
+    } else if (isDmChannel(message.channel)) {
       postMessage(qc, i18n(lang, 'welcomeMessage'));
     }
     return;
@@ -63,8 +66,33 @@ export const handleMessage = async (message: Message) => {
     .trim()
     .split(/ +/g);
 
-  const parsedCmd = parseWords(words.join(' '));
+  const parsedCmd = parseWords(words.join(" "));
   handleCommand(command.toLowerCase(), author, qc, parsedCmd);
+};
+
+export const handleInteraction = async (interaction: Interaction) => {
+  if (!interaction.isCommand()) return;
+  const client = getClient();
+
+  // defer the reply so that 'the application did not responded' is avoided,
+  // and also because it counts as a reply
+  await interaction.deferReply();
+
+  // get command from the loaded slash commands
+  const command = client.slashCommands.get(interaction.commandName) as any;
+
+  // if not found
+  if (!command) interaction.reply("This slash command couldn't be found");
+
+  if (!isQCSupportedChannel(interaction.channel)) return;
+
+  const qc = new QChannel(interaction.channel);
+
+  // run the command
+  await command.function({ client, interaction, qc });
+
+  // delete the command reply (the defer)
+  await interaction.deleteReply();
 };
 
 export const handleError = ({ message }: Error) => {
@@ -90,9 +118,11 @@ export const handleReady = async () => {
   // If we're using DBL, init it here
   dbl();
   createStream();
+  loadSlashCmds();
+  registerSlashCommands(getClient());
 };
 
-export const handleChannelDelete = async (c: Channel) => {
+export const handleChannelDelete = async (c: AnyChannel) => {
   if (!isTextChannel(c)) return;
   const {id, name} = c;
   const { users } = await rmChannel(id);

@@ -1,10 +1,10 @@
 // A module for formatting data for displaying
 
-import Discord from 'discord.js';
-import * as config from '../../config.json';
+import Discord, {MessageOptions} from 'discord.js';
 import { isSet } from '../flags';
 import i18n from './i18n';
 import { QCSerialized } from './QChannel/type';
+import process from 'process'
 
 const defaults = {
   data: [],
@@ -36,14 +36,12 @@ interface PostTranslatedReturn {
   cmd: typeof FORMAT_POST_TRANSLATED,
   qc: QCSerialized,
   trCode: string,
-};
-
-type PostableEmbedded = {embed: object};
+}
 
 interface PostEmbedsReturn {
   cmd: typeof FORMAT_POST_EMBEDS,
   qc: QCSerialized,
-  embeds: PostableEmbedded[],
+  embeds: MessageOptions[],
 }
 
 export const formatGenericList = async <T, P=object>(
@@ -76,11 +74,11 @@ export const formatGenericList = async <T, P=object>(
     };
   }
   let page = 1;
-  const embeds: PostableEmbedded[] = [];
+  const embeds: MessageOptions[] = [];
   let embed = new Discord.MessageEmbed()
     .setColor(color)
     .setTitle(`${i18n(lang, objectName, { count: data.length })}:`)
-    .setURL(config.profileURL);
+    .setURL(process.env.PROFILE_URL);
   if (description) {
     embed.setDescription(description);
   }
@@ -99,18 +97,18 @@ export const formatGenericList = async <T, P=object>(
     counter += 1;
     if (counter > 20) {
       page += 1;
-      embeds.push({ embed: { ...embed } });
+      embeds.push({ embeds: [{...embed}] });
       embed = new Discord.MessageEmbed()
         .setColor(color)
         .setTitle(
           `${i18n(lang, objectName, { count: data.length })} (${page}):`,
         )
-        .setURL(config.profileURL);
+        .setURL(process.env.PROFILE_URL);
       counter = 0;
     }
   }
   if (counter > 0) {
-    embeds.push({ embed: { ...embed } });
+    embeds.push({ embeds: [{ ...embed }]});
   }
   return {
     cmd: FORMAT_POST_EMBEDS,
@@ -128,9 +126,8 @@ const formatSubMsg = (msg: string | undefined) => {
 
 export const formatFlags = (lang: string, flags: number) => i18n(lang, 'formatFlags', {
   notext: isSet(flags, 'notext'),
-  retweet: isSet(flags, 'retweet'),
-  noquote: isSet(flags, 'noquote'),
-  ping: isSet(flags, 'ping'),
+  retweet: isSet(flags, 'retweets'),
+  noquote: isSet(flags, 'noquotes'),
   replies: isSet(flags, 'replies'),
 });
 

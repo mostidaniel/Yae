@@ -1,21 +1,11 @@
 import Twitter from 'twitter-lite';
-import { Status as Tweet } from 'twitter-d';
 import unfurl from 'unfurl.js';
-import { isSet } from './flags';
-import Backup from './backup';
 import log from './log';
-
-import { post, someoneHasChannel } from './shardMgr/shardManager';
-import Stream from './twitterStream';
+import { someoneHasChannel } from './shardMgr/shardManager';
 import {
-  updateUser,
-  getUserIds,
   getUsersForSanityCheck,
   bulkDeleteUsers,
 } from './db/user';
-import {
-  getUserSubs,
-} from './db/subs';
 import {
   getChannels,
   rmChannel,
@@ -24,12 +14,7 @@ import {
   sanityCheck as dbSanityCheck,
 } from './db';
 
-// Stream object, holds the twitter feed we get posts from, initialized at the first
-let stream = null;
-let twitterTimeout = null;
-const twitterTimeoutDelay = Number(process.env.TWEETS_TIMEOUT);
-
-const colors = Object.freeze({
+export const colors = Object.freeze({
   text: 0x69b2d6,
   video: 0x67d67d,
   image: 0xd667cf,
@@ -43,44 +28,13 @@ const tClient = new Twitter({
   access_token_secret: process.env.TWITTER_ACCESS_TOKEN_SECRET,
 });
 
-const DISABLE_STREAMS = !!Number(process.env.DISABLE_STREAMS);
-
-const reconnectionDelay = new Backup({
-  mode: 'exponential',
-  startValue: 2 * 1000,
-  maxValue: Number(process.env.TWITTER_MAX_RECONNECT_DELAY) || 240000,
-});
-
-let reconnectionTimeoutID = null;
-
-export const destroyStream = () => {
-  if (stream) { stream.disconnected(); }
-};
-
-function resetTwitterTimeout() {
-  if (twitterTimeoutDelay <= 0) return;
-  if (twitterTimeout !== null) {
-    clearTimeout(twitterTimeout);
-  }
-  twitterTimeout = setTimeout(() => {
-    twitterTimeout = null;
-    log(`❌ ${twitterTimeoutDelay}s without tweets, resetting stream...`);
-    if (reconnectionTimeoutID) {
-      log('❌ We\'re already in reconnection mode, abort timeout system');
-      return;
-    }
-    destroyStream();
-    // eslint-disable-next-line no-use-before-define
-    setTimeout(createStream, 30000);
-  }, twitterTimeoutDelay * 1000);
-}
-
-// Checks if a tweet has any media attached. If false, it's a text tweet
+// Checks if a v1 tweet has any media attached. If false, it's a text tweet
 export const hasMedia = ({
   extended_entities: extendedEntities,
   extended_tweet: extendedTweet,
   retweeted_status: retweetedStatus,
-}) => (extendedEntities
+}) => (
+  (extendedEntities
     && extendedEntities.media
     && extendedEntities.media.length > 0)
   || (extendedTweet
@@ -90,21 +44,21 @@ export const hasMedia = ({
   || (retweetedStatus
     && retweetedStatus.extended_entities
     && retweetedStatus.extended_entities.media
-    && retweetedStatus.extended_entities.media.length > 0);
+    && retweetedStatus.extended_entities.media.length > 0)
+);
 
 // Validation function for tweets
 export const isValid = (tweet) => !(
   // Ignore undefined or null tweets
-  !tweet
-    // Ignore tweets without a user object
-    || !tweet.user
-    // Ignore tweets where there is a quote status and not a quoted_status or a user for it.
-    || (tweet.is_quote_status
-      && (!tweet.quoted_status || !tweet.quoted_status.user))
+  !tweet || !tweet.data || !tweet.data.id
+  // Ignore tweets without a user object
+  || !tweet.data.author_id
+  || !tweet.includes
+  || !tweet.includes.users
 );
 
 const unfurlUrl = async (url) => {
-  const { expanded_url: expandedUrl, indices } = url;
+  const { expanded_url: expandedUrl, indices = [ url.start, url.end ] } = url;
   if (!(expandedUrl && indices && indices.length === 2)) return null;
   try {
     const unfurledUrl = await unfurl(expandedUrl);
@@ -130,20 +84,29 @@ const bestPicture = (twitterCard, openGraph) => {
   return bestImg.startsWith('//') ? `https:${bestImg}` : bestImg;
 };
 
-const formatTweetText = async (text, entities, isTextTweet) => {
+export const formatTweetText = async (text, entities, isTextTweet) => {
   if (!entities) return text;
-  const { user_mentions: userMentions, urls, hashtags } = entities;
+  const { user_mentions: userMentions, mentions, urls, hashtags, cashtags } = entities;
   const changes = [];
   const metadata = {};
   let offset = 0;
   // Remove all the @s at the start of the tweet to make it shorter
   let inReplies = true;
   let replyIndex = 0;
-  if (userMentions) {
-    userMentions
-      .filter(
-        ({ screen_name: screenName, indices }) => screenName && indices && indices.length === 2,
-      )
+  if (userMentions || mentions) {
+    // v1 user_mentions:
+    (userMentions && userMentions.filter(
+      ({ screen_name: screenName, indices }) => screenName && indices && indices.length === 2
+      // v2 mentions conversion:
+    ) || mentions.reduce(
+      (a, { start, end, username }) => {
+        if((start || start === 0) && end && username) {
+          a.push({screen_name: username, indices: [start, end]});
+        }
+        return a;
+      }, [],
+    ))
+    // Handle mentions for both APIs
       .forEach(({ screen_name: screenName, name, indices }) => {
         const [start, end] = indices;
         if (inReplies && start === replyIndex) {
@@ -188,17 +151,30 @@ const formatTweetText = async (text, entities, isTextTweet) => {
   }
   if (hashtags) {
     hashtags
-      .filter(({ text: hashtagTxt, indices }) => hashtagTxt && indices && indices.length === 2)
-      .forEach(({ text: hashtagTxt, indices }) => {
-        const [start, end] = indices;
+      .filter(({ text: hashtagTxt, indices, tag, start, end }) => {
+        hashtagTxt && indices && indices.length === 2 || tag && start && end
+      })
+      .forEach(({ text: hashtagTxt, indices, tag, start, end }) => {
+        if (indices) {
+          [start, end] = indices;
+          tag = hashtagTxt;
+        }
         changes.push({
           start,
           end,
-          newText: `[#${hashtagTxt}](https://twitter.com/hashtag/${hashtagTxt}?src=hash)`,
+          newText: `[#${tag}](https://twitter.com/hashtag/${tag}?src=hash)`,
         });
-        if (hashtagTxt.toLowerCase() === 'qtweet') {
-          metadata.ping = true;
-        }
+      });
+  }
+  if (cashtags) {
+    cashtags
+      .filter(({ tag, start, end }) => tag && start && end)
+      .forEach(({ tag, start, end }) => {
+        changes.push({
+          start,
+          end,
+          newText: `[$${tag}](https://twitter.com/search?q=%24${tag}&src=cashtag)`,
+        });
       });
   }
 
@@ -228,7 +204,7 @@ const formatTweetText = async (text, entities, isTextTweet) => {
   };
 };
 
-// Takes a tweet and formats it for posting.
+// Takes a v1 tweet and formats it for posting.
 export const formatTweet = async (tweet, isQuoted) => {
   const {
     user,
@@ -272,8 +248,8 @@ export const formatTweet = async (tweet, isQuoted) => {
       url: user.profile_image_url_https,
     },
     color: user.profile_link_color
-      ? parseInt(user.profile_link_color, 16)
-      : null,
+    ? parseInt(user.profile_link_color, 16)
+    : null,
   };
   // For any additional files
   let files = null;
@@ -329,164 +305,12 @@ export const formatTweet = async (tweet, isQuoted) => {
     embed.color = embed.color || colors.image;
   }
   embed.description = txt;
-  return { embed: { embed, files }, metadata };
-};
-
-// Takes a tweet and determines whether or not it should be posted with these flags
-const flagsFilter = (flags, tweet) => {
-  if (isSet(flags, 'notext') && !hasMedia(tweet)) {
-    return false;
-  }
-  if (!isSet(flags, 'retweet') && tweet.retweeted_status) {
-    return false;
-  }
-  if (isSet(flags, 'noquote') && tweet.is_quote_status) return false;
-  if (!isSet(flags, 'replies') && tweet.in_reply_to_user_id && tweet.in_reply_to_user_id !== tweet.user.id) return false;
-  return true;
-};
-
-export const getFilteredSubs = async (tweet) => {
-  // Ignore invalid tweets
-  if (!isValid(tweet)) return [];
-  // Ignore tweets from people we don't follow
-  // and replies unless they're replies to oneself (threads)
-  const subs = await getUserSubs(tweet.user.id_str);
-  if (
-    !subs
-    || subs.length === 0
-  ) return [];
-
-  const targetSubs = [];
-  for (let i = 0; i < subs.length; i += 1) {
-    const {
-      flags, channelId, isDM, msg,
-    } = subs[i];
-    if (isDM) log(`Should we post ${tweet.id_str} in channel ${channelId}?`, null, true);
-    if (flagsFilter(flags, tweet)) {
-      if (isDM) log(`Added (${channelId}, ${isDM}) to targetSubs.`, null, true);
-      targetSubs.push({ flags, qChannel: { channelId, isDM }, msg });
-    }
-  }
-  return targetSubs;
-};
-
-// Called on stream connection
-// Reset our reconnection delay
-const streamStart = () => {
-  log('✅ Stream successfully started');
-  if (twitterTimeoutDelay > 0) {
-    log(`Will reconnect if inactive for ${twitterTimeoutDelay}s`);
-  }
-  resetTwitterTimeout();
-  reconnectionDelay.reset();
-};
-
-// Called when we receive data
-const streamData = async (tweet) => {
-  resetTwitterTimeout();
-  const subs = await getFilteredSubs(tweet);
-  if (subs.length === 0) {
-    log('✅ Discarded a tweet', null, true);
-    return;
-  }
-  log(`✅ Received valid tweet: ${tweet.id_str}, forwarding to ${subs.length} Discord subscriptions`, null, true);
-  const { embed, metadata } = await formatTweet(tweet);
-  subs.forEach(({ flags, qChannel, msg }) => {
-    if (metadata.ping && isSet(flags, 'ping')) {
-      post(qChannel, '@everyone', 'message');
-    }
-    if (msg) {
-      post(qChannel, msg, 'message');
-    }
-    post(qChannel, embed, 'embed');
-  });
-  if (tweet.is_quote_status) {
-    const { embed: quotedEmbed } = await formatTweet(tweet.quoted_status, true);
-    subs.forEach(({ flags, qChannel }) => {
-      if (!flags.noquote) {
-        post(qChannel, quotedEmbed, 'embed');
-      }
-    });
-  }
-  updateUser(tweet.user);
-};
-
-// Called when twitter ends the connection
-const streamEnd = () => {
-  // The backup exponential algorithm will take care of reconnecting
-  destroyStream();
-  log(
-    `❌ We got disconnected from twitter. Reconnecting in ${reconnectionDelay.value()}ms...`,
-  );
-  if (reconnectionTimeoutID) {
-    clearTimeout(reconnectionTimeoutID);
-  }
-  // eslint-disable-next-line no-use-before-define
-  reconnectionTimeoutID = setTimeout(createStreamClearTimeout, reconnectionDelay.value());
-  reconnectionDelay.increment();
-};
-
-// Called when the stream has an error
-const streamError = ({ url, status, statusText }) => {
-  if (status === 420 && reconnectionDelay.value() < 60000) {
-    log('⚙️ 420 status code detected, jumping to 1min delay immediately', null, true);
-    // If we're being rate-limited, wait 1min at least, up to max
-    reconnectionDelay.set(60000);
-  }
-  // We simply can't get a stream, don't retry
-  stream.disconnected(false);
-  const delay = reconnectionDelay.value();
-  if (reconnectionTimeoutID) {
-    clearTimeout(reconnectionTimeoutID);
-  } else {
-    reconnectionDelay.increment();
-  }
-  log(
-    `❌ Twitter Error (${status}: ${statusText}) at ${url}. Reconnecting in ${delay}ms`,
-  );
-  // eslint-disable-next-line no-use-before-define
-  reconnectionTimeoutID = setTimeout(createStreamClearTimeout, delay);
+  return { embed: { embeds: [embed], files }, metadata };
 };
 
 export const getError = (response) => {
   if (!response || !response.errors || response.errors.length < 1) return { code: null, msg: null };
   return response.errors[0];
-};
-
-// Register the stream with twitter, unregistering the previous stream if there was one
-// Uses the users variable
-export const createStream = async () => {
-  if (reconnectionTimeoutID) {
-    log('Got a new stream request but we\'re already waiting for a reconnection...');
-    return null;
-  }
-  if (!stream) {
-    stream = new Stream(
-      tClient,
-      streamStart,
-      streamData,
-      streamError,
-      streamEnd,
-    );
-  }
-  // Get all the user IDs
-  const userIds = await getUserIds();
-  // If there are none, we can just leave stream at null
-  if (!userIds || userIds.length < 1) {
-    log('No user IDs, no need to create a stream...');
-    return null;
-  }
-  if (!DISABLE_STREAMS) {
-    stream.create(userIds.map(({ twitterId }) => twitterId));
-  } else {
-    log('ATTENTION: the DISABLE_STREAMS variable is set, meaning streams are currently not being created!');
-  }
-  return null;
-};
-
-const createStreamClearTimeout = () => {
-  reconnectionTimeoutID = null;
-  createStream();
 };
 
 export const userLookup = (params) => tClient.post('users/lookup', params);

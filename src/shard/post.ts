@@ -3,7 +3,8 @@ import QChannel from './QChannel/QChannel';
 import i18n, { i18nOptions } from './i18n';
 import { QCSerialized, QCSupportedChannel } from './QChannel/type';
 import { getLang } from '../db/guilds';
-import { ReactionUserManager } from 'discord.js';
+import { MessageEmbed, MessageOptions, ReactionUserManager } from 'discord.js';
+import {APIEmbed} from 'discord-api-types';
 
 // Return values for post functions:
 // 0: Success
@@ -12,6 +13,7 @@ import { ReactionUserManager } from 'discord.js';
 // 3: Number of attempts expired, user wasn't warned
 // 4: No way to contact user about error
 
+// eslint-disable-next-line @typescript-eslint/ban-types
 const asyncTimeout = <T=any>(f: Function, ms: number): Promise<T> => new Promise((resolve) => setTimeout(() => {
   resolve(f());
 }, ms));
@@ -153,7 +155,7 @@ const handleDiscordPostError = async (
   }, delay);
 };
 
-export const post = async (qChannel: QChannel, content: any, type: 'embed' | 'message'): Promise<number> => {
+export const post = async (qChannel: QChannel, content: string | MessageOptions, type: 'embed' | 'message'): Promise<number> => {
   try {
     await qChannel.send(content);
   } catch (err) {
@@ -162,20 +164,13 @@ export const post = async (qChannel: QChannel, content: any, type: 'embed' | 'me
   return 0;
 };
 
-export const embed = (qChannel: QChannel, content: any): Promise<number> => post(qChannel, content, 'embed');
+export const embed = (qChannel: QChannel, content: MessageOptions): Promise<number> => post(qChannel, content, 'embed');
 
-export const embeds = async (qChannel: QChannel, arr: any[]) => {
-  let successful = 0;
-  for (let i = 0; i < arr.length; i += 1) {
-    const content = arr[i];
-    // We have to do this for embeds to post in order
-    // eslint-disable-next-line no-await-in-loop
-    const errorCode = await embed(qChannel, content);
-    if (errorCode !== 0) return { err: errorCode, successful };
-    successful += 1;
+export const embeds = async (qChannel: QChannel, arr: MessageOptions[]) => {
+  for (let i=0 ; i < arr.length ; i += 1) {
+    await post(qChannel, arr[i], 'embed');
   }
-  return { err: null, successful };
-};
+}
 
 export const message = (qChannel: QChannel, content: any) => post(qChannel, content, 'message');
 

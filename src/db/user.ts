@@ -1,4 +1,5 @@
-import { getInt, pool, sanityCheck } from '.'
+import { UserV2 } from 'twitter-api-v2';
+import { getInt, pool, sanityCheck } from './index'
 
 type DbUser = {
   twitterId: string;
@@ -26,10 +27,10 @@ export const getUserInfo = async (twitterId: string) => {
   return info;
 };
 
-export const updateUser = async (user: any) => {
-  const usrInfo = await getUserInfo(user.id_str);
-  if (!usrInfo || usrInfo.name !== user.screen_name) {
-    return addUser(user.id_str, user.screen_name);
+export const updateUser = async (user: UserV2) => {
+  const usrInfo = await getUserInfo(user.id);
+  if (!usrInfo || usrInfo.name !== user.name) {
+    return addUser(user.id, user.name);
   }
   return 0;
 };

@@ -18,6 +18,9 @@ helpIntro =
   
   Here's a short list of commands to get you started:
 
+# What QTWeet posts when people ping her
+pingReply = My prefix on this server is `{$prefix}`.
+
 # Footer giving credit to the artist
 helpFooter = Profile picture art by {$artist}
 
@@ -269,9 +272,6 @@ formatFlags = With {$notext ->
   }, {$noquote ->
     *[0] quotes
     [1] no quotes
-  }, pings {$ping -> 
-    *[0] off
-    [1] on
   } and {$replies -> 
     *[0] no replies
     [1] replies
@@ -321,3 +321,9 @@ userLimit =
 
 ### Credit
 languageCredit = English, made by `Booyah!#4242`
+
+### Temporary/Urgent stuff
+slashCmdsWarning =
+  :warning: {-b}Regular commands will soon be replaced by slash commands.{-b}
+  Within a few weeks, {-bot-name} won't work with regular commands anymore as Discord is forcing all bots to move to slash commands.
+  I recommend trying to use slash commands right now and reporting bugs to our support server if there's any issue!

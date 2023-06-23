@@ -135,6 +135,7 @@ const handleCommand = async (commandName: string, author: User, qChannel: QChann
         qChannel,
       );
       const passedArray = await Promise.all(command.checks.map(({ f }) => f(author, qChannel)));
+      translated(qChannel, 'slashCmdsWarning')
       for (let i = 0; i < command.checks.length; i += 1) {
         const { badB } = command.checks[i];
         if (!passedArray[i]) {

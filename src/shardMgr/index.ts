@@ -1,4 +1,4 @@
-import { Shard } from "discord.js";
+import {FlagName} from "../flags";
 import { QCSerialized } from "../shard/QChannel/type";
 
 export const CMD_TWEET = 'tweet';
@@ -28,7 +28,7 @@ export type CmdTweet = {
     screen_name: string;
     tweet_type: string;
     qc: QCSerialized;
-    flags: string[];
+    flags: FlagName[];
     count: number;
 }
 
@@ -55,7 +55,7 @@ export type CmdStart = {
     flags: number;
     // Needs a little extra info on this one
     qc: QCSerialized & { ownerId: string, guildId: string};
-    msg?: string;
+    msg: string|null;
 }
 
 type MasterStartResponse = TrCmd | {
